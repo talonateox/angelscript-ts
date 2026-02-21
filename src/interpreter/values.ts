@@ -8,6 +8,7 @@ export type ASValue =
     | NativeObjectValue
     | HandleValue
     | VoidValue
+    | ArrayValue
     | NativeFunctionValue
     | FunctionValue;
 
@@ -36,6 +37,11 @@ export interface HandleValue {
     ref: ObjectValue | NativeObjectValue | null;
 }
 
+export interface ArrayValue {
+    kind: "array";
+    elements: ASValue[];
+}
+
 export interface FunctionValue {
     kind: "function";
     name: string;
@@ -56,6 +62,7 @@ export const STRING = (value: string): StringValue => ({ kind: "string", value }
 export const NULL_VAL: NullValue = { kind: "null" };
 export const VOID_VAL: VoidValue = { kind: "void" };
 export const HANDLE = (ref: ObjectValue | NativeObjectValue | null): HandleValue => ({ kind: "handle", ref });
+export const ARRAY = (elements: ASValue[] = []): ArrayValue => ({ kind: "array", elements });
 
 export function newObject(typeName: string): ObjectValue {
     return { kind: "object", typeName, fields: new Map(), refCount: 1 };
@@ -70,6 +77,7 @@ export function isTruthy(val: ASValue): boolean {
         case "null": return false;
         case "handle": return val.ref !== null;
         case "void": return false;
+        case "array": return true;
         default: return true;
     }
 }
@@ -85,8 +93,6 @@ export function isEqual(a: ASValue, b: ASValue): boolean {
     if (a.kind === "null" && b.kind === "null") return true;
     if (a.kind === "null" || b.kind === "null") return false;
     if (a.kind === "handle" && b.kind === "handle") return a.ref === b.ref;
-
-
     if ((a.kind === "int" || a.kind === "float") && (b.kind === "int" || b.kind === "float")) {
         return asNumber(a) === asNumber(b);
     }
@@ -107,6 +113,7 @@ export function stringify(val: ASValue): string {
         case "handle": return val.ref ? `[${val.ref.typeName} handle]` : "null";
         case "object": return `[${val.typeName}]`;
         case "native": return `[${val.typeName}]`;
+        case "array": return `[${val.elements.map((val) => stringify(val))}]`;
         case "function": return `[function ${val.name}]`;
         case "native_function": return `[native ${val.name}]`;
     }

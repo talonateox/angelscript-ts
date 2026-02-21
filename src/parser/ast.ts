@@ -21,6 +21,7 @@ export interface VarDecl {
     typeRef: TypeRef;
     name: string;
     initializer?: Expr;
+    arraySizeInit?: Expr;
     isConst: boolean;
     line: number;
 }
@@ -158,40 +159,12 @@ export type Expr =
     | TernaryExpr
     | HandleAssignExpr;
 
-export interface IntLiteral {
-    kind: "IntLiteral";
-    value: number;
-    line: number;
-}
-
-export interface FloatLiteral {
-    kind: "FloatLiteral";
-    value: number;
-    line: number;
-}
-
-export interface StringLiteral {
-    kind: "StringLiteral";
-    value: string;
-    line: number;
-}
-
-export interface BoolLiteral {
-    kind: "BoolLiteral";
-    value: boolean;
-    line: number;
-}
-
-export interface NullLiteral {
-    kind: "NullLiteral";
-    line: number;
-}
-
-export interface Identifier {
-    kind: "Identifier";
-    name: string;
-    line: number;
-}
+export interface IntLiteral { kind: "IntLiteral"; value: number; line: number; }
+export interface FloatLiteral { kind: "FloatLiteral"; value: number; line: number; }
+export interface StringLiteral { kind: "StringLiteral"; value: string; line: number; }
+export interface BoolLiteral { kind: "BoolLiteral"; value: boolean; line: number; }
+export interface NullLiteral { kind: "NullLiteral"; line: number; }
+export interface Identifier { kind: "Identifier"; name: string; line: number; }
 
 export interface AssignExpr {
     kind: "AssignExpr";
@@ -208,61 +181,11 @@ export interface HandleAssignExpr {
     line: number;
 }
 
-export interface BinaryExpr {
-    kind: "BinaryExpr";
-    left: Expr;
-    op: string;
-    right: Expr;
-    line: number;
-}
-
-export interface UnaryExpr {
-    kind: "UnaryExpr";
-    op: string;
-    operand: Expr;
-    prefix: boolean;
-    line: number;
-}
-
-export interface CallExpr {
-    kind: "CallExpr";
-    callee: Expr;
-    args: Expr[];
-    line: number;
-}
-
-export interface MemberExpr {
-    kind: "MemberExpr";
-    object: Expr;
-    member: string;
-    line: number;
-}
-
-export interface IndexExpr {
-    kind: "IndexExpr";
-    object: Expr;
-    index: Expr;
-    line: number;
-}
-
-export interface NewExpr {
-    kind: "NewExpr";
-    typeName: string;
-    args: Expr[];
-    line: number;
-}
-
-export interface CastExpr {
-    kind: "CastExpr";
-    targetType: TypeRef;
-    expr: Expr;
-    line: number;
-}
-
-export interface TernaryExpr {
-    kind: "TernaryExpr";
-    condition: Expr;
-    then: Expr;
-    else: Expr;
-    line: number;
-}
+export interface BinaryExpr { kind: "BinaryExpr"; left: Expr; op: string; right: Expr; line: number; }
+export interface UnaryExpr { kind: "UnaryExpr"; op: string; operand: Expr; prefix: boolean; line: number; }
+export interface CallExpr { kind: "CallExpr"; callee: Expr; args: Expr[]; line: number; }
+export interface MemberExpr { kind: "MemberExpr"; object: Expr; member: string; line: number; }
+export interface IndexExpr { kind: "IndexExpr"; object: Expr; index: Expr; line: number; }
+export interface NewExpr { kind: "NewExpr"; typeName: string; args: Expr[]; line: number; }
+export interface CastExpr { kind: "CastExpr"; targetType: TypeRef; expr: Expr; line: number; }
+export interface TernaryExpr { kind: "TernaryExpr"; condition: Expr; then: Expr; else: Expr; line: number; }

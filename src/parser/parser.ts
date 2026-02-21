@@ -45,6 +45,14 @@ export class Parser {
         const typeRef = this.parseTypeRef();
         const name = this.expect(TokenType.IDENTIFIER).value;
 
+        if (typeRef.name === "array" && this.check(TokenType.LPAREN)) {
+            this.advance();
+            const arraySizeInit = this.parseExpr();
+            this.expect(TokenType.RPAREN);
+            this.expect(TokenType.SEMICOLON);
+            return { kind: "VarDecl", typeRef, name, arraySizeInit, isConst, line };
+        }
+
         if (this.check(TokenType.LPAREN)) {
             if (isConst) this.error("Functions cannot be const");
             return this.parseFuncRest(typeRef, name);
@@ -168,6 +176,13 @@ export class Parser {
             this.expect(TokenType.GT);
         }
 
+        if (this.check(TokenType.LBRACKET) && this.tokens[this.pos + 1]?.type === TokenType.RBRACKET) {
+            this.advance(); this.advance();
+            const elementType: AST.TypeRef = { name, isHandle: false, isConst };
+            const isHandle = this.matchTok(TokenType.AT);
+            return { name: "array", isHandle, isConst: false, templateArg: elementType };
+        }
+
         const isHandle = this.matchTok(TokenType.AT);
         return { name, isHandle, isConst, templateArg };
     }
@@ -219,10 +234,20 @@ export class Parser {
         const isConst = this.matchTok(TokenType.CONST);
         const typeRef = this.parseTypeRef();
         const name = this.expect(TokenType.IDENTIFIER).value;
+
         let initializer: AST.Expr | undefined;
-        if (this.matchTok(TokenType.ASSIGN)) initializer = this.parseExpr();
+        let arraySizeInit: AST.Expr | undefined;
+
+        if (this.matchTok(TokenType.ASSIGN)) {
+            initializer = this.parseExpr();
+        } else if (typeRef.name === "array" && this.check(TokenType.LPAREN)) {
+            this.advance();
+            arraySizeInit = this.parseExpr();
+            this.expect(TokenType.RPAREN);
+        }
+
         this.expect(TokenType.SEMICOLON);
-        return { kind: "VarDecl", typeRef, name, initializer, isConst, line };
+        return { kind: "VarDecl", typeRef, name, initializer, arraySizeInit, isConst, line };
     }
 
     private parseExprStmt(): AST.ExprStmt {

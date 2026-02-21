@@ -1,16 +1,15 @@
 import * as AST from "../parser/ast";
 import type {
-    ASValue, ObjectValue, NativeObjectValue, FunctionValue, NativeFunctionValue, HandleValue,
-} from "./values.ts";
+    ASValue, ObjectValue, NativeObjectValue, FunctionValue, NativeFunctionValue, HandleValue, ArrayValue,
+} from "./values";
 import {
-    INT, FLOAT, BOOL, STRING, NULL_VAL, VOID_VAL, HANDLE,
+    INT, FLOAT, BOOL, STRING, NULL_VAL, VOID_VAL, HANDLE, ARRAY,
     newObject, isTruthy, asNumber, isEqual, stringify,
 } from "./values";
 import { Environment, ReturnSignal, BreakSignal, ContinueSignal, RuntimeError } from "./environment";
 
 export class Interpreter {
     public globals: Environment = new Environment();
-
     private classDefs = new Map<string, AST.ClassDecl>();
 
     execute(program: AST.Program): void {
@@ -30,15 +29,7 @@ export class Interpreter {
 
         for (const decl of program.body) {
             if (decl.kind === "VarDecl") {
-                let value: ASValue;
-                if (decl.initializer) {
-                    value = this.evalExpr(decl.initializer, this.globals);
-                } else if (this.classDefs.has(decl.typeRef.name)) {
-                    value = this.instantiateClass(decl.typeRef.name, []);
-                } else {
-                    value = this.defaultValue(decl.typeRef);
-                }
-                this.globals.define(decl.name, value);
+                this.globals.define(decl.name, this.initVarDecl(decl, this.globals));
             }
         }
     }
@@ -54,7 +45,7 @@ export class Interpreter {
                 this.execBlock(stmt, env.child());
                 break;
             case "VarDecl":
-                this.execVarDecl(stmt, env);
+                env.define(stmt.name, this.initVarDecl(stmt, env));
                 break;
             case "ExprStmt":
                 this.evalExpr(stmt.expr, env);
@@ -91,11 +82,24 @@ export class Interpreter {
         }
     }
 
-    private execVarDecl(decl: AST.VarDecl, env: Environment): void {
-        const value = decl.initializer
-            ? this.evalExpr(decl.initializer, env)
-            : this.defaultValue(decl.typeRef);
-        env.define(decl.name, value);
+    private initVarDecl(decl: AST.VarDecl, env: Environment): ASValue {
+        if (decl.initializer) {
+            return this.evalExpr(decl.initializer, env);
+        }
+        if (decl.arraySizeInit) {
+            const size = asNumber(this.evalExpr(decl.arraySizeInit, env));
+            const elementDefault = decl.typeRef.templateArg
+                ? this.defaultValue(decl.typeRef.templateArg)
+                : INT(0);
+            return ARRAY(Array.from({ length: size }, () => elementDefault));
+        }
+        if (decl.typeRef.name === "array") {
+            return ARRAY();
+        }
+        if (this.classDefs.has(decl.typeRef.name) && !decl.typeRef.isHandle) {
+            return this.instantiateClass(decl.typeRef.name, []);
+        }
+        return this.defaultValue(decl.typeRef);
     }
 
     private execIf(stmt: AST.IfStmt, env: Environment): void {
@@ -108,15 +112,12 @@ export class Interpreter {
 
     private execFor(stmt: AST.ForStmt, env: Environment): void {
         const loopEnv = env.child();
-
         if (stmt.init) {
-            if (stmt.init.kind === "VarDecl") this.execVarDecl(stmt.init, loopEnv);
+            if (stmt.init.kind === "VarDecl") loopEnv.define(stmt.init.name, this.initVarDecl(stmt.init, loopEnv));
             else this.evalExpr(stmt.init.expr, loopEnv);
         }
-
         while (true) {
             if (stmt.condition && !isTruthy(this.evalExpr(stmt.condition, loopEnv))) break;
-
             try {
                 this.execStmt(stmt.body, loopEnv);
             } catch (e) {
@@ -124,7 +125,6 @@ export class Interpreter {
                 if (e instanceof ContinueSignal) { /* fall through to update */ }
                 else throw e;
             }
-
             if (stmt.update) this.evalExpr(stmt.update, loopEnv);
         }
     }
@@ -156,7 +156,6 @@ export class Interpreter {
     private execSwitch(stmt: AST.SwitchStmt, env: Environment): void {
         const val = this.evalExpr(stmt.expr, env);
         let matched = false;
-
         for (const c of stmt.cases) {
             if (!matched) {
                 if (c.value === undefined) { matched = true; }
@@ -180,9 +179,7 @@ export class Interpreter {
             case "StringLiteral": return STRING(expr.value);
             case "BoolLiteral": return BOOL(expr.value);
             case "NullLiteral": return NULL_VAL;
-
             case "Identifier": return env.get(expr.name);
-
             case "AssignExpr": return this.evalAssign(expr, env);
             case "HandleAssignExpr": return this.evalHandleAssign(expr, env);
             case "BinaryExpr": return this.evalBinary(expr, env);
@@ -197,7 +194,6 @@ export class Interpreter {
                     : this.evalExpr(expr.else, env);
             case "CastExpr":
                 return this.evalCast(expr, env);
-
             default:
                 throw new RuntimeError(`Unknown expression kind: ${(expr as any).kind}`);
         }
@@ -205,7 +201,6 @@ export class Interpreter {
 
     private evalAssign(expr: AST.AssignExpr, env: Environment): ASValue {
         const value = this.evalExpr(expr.value, env);
-
         const computeValue = (current: ASValue): ASValue => {
             if (expr.op === "=") return value;
             const l = asNumber(current);
@@ -222,7 +217,6 @@ export class Interpreter {
                 default: throw new RuntimeError(`Unknown op ${expr.op}`);
             }
         };
-
         this.assignTo(expr.target, env, computeValue);
         return value;
     }
@@ -233,7 +227,6 @@ export class Interpreter {
             : rhs.kind === "null" ? HANDLE(null)
                 : rhs.kind === "object" || rhs.kind === "native" ? HANDLE(rhs)
                     : HANDLE(null);
-
         this.assignTo(expr.target, env, () => handle);
         return handle;
     }
@@ -249,12 +242,12 @@ export class Interpreter {
             fields.set(target.member, getValue(current));
         } else if (target.kind === "IndexExpr") {
             const obj = this.evalExpr(target.object, env);
-            const idx = this.evalExpr(target.index, env);
-            if (obj.kind === "native") {
-                const arr = obj.native;
-                const i = asNumber(idx);
-                const current = this.wrapNative(arr[i]);
-                arr[i] = this.unwrap(getValue(current));
+            const i = asNumber(this.evalExpr(target.index, env));
+            if (obj.kind === "array") {
+                obj.elements[i] = getValue(obj.elements[i] ?? INT(0));
+            } else if (obj.kind === "native") {
+                const current = this.wrapNative(obj.native[i]);
+                obj.native[i] = this.unwrap(getValue(current));
             } else {
                 throw new RuntimeError(`Index assignment on non-array`);
             }
@@ -284,10 +277,7 @@ export class Interpreter {
             case "+": return this.makeNumeric(left, asNumber(left) + asNumber(right));
             case "-": return this.makeNumeric(left, asNumber(left) - asNumber(right));
             case "*": return this.makeNumeric(left, asNumber(left) * asNumber(right));
-            case "/": {
-                const r = asNumber(right);
-                return this.makeNumeric(left, r !== 0 ? asNumber(left) / r : 0);
-            }
+            case "/": { const r = asNumber(right); return this.makeNumeric(left, r !== 0 ? asNumber(left) / r : 0); }
             case "%": return this.makeNumeric(left, asNumber(left) % asNumber(right));
             case "&": return INT((asNumber(left) | 0) & (asNumber(right) | 0));
             case "|": return INT((asNumber(left) | 0) | (asNumber(right) | 0));
@@ -300,8 +290,7 @@ export class Interpreter {
             case ">": return BOOL(asNumber(left) > asNumber(right));
             case "<=": return BOOL(asNumber(left) <= asNumber(right));
             case ">=": return BOOL(asNumber(left) >= asNumber(right));
-            default:
-                throw new RuntimeError(`Unknown binary op: ${expr.op}`);
+            default: throw new RuntimeError(`Unknown binary op: ${expr.op}`);
         }
     }
 
@@ -315,7 +304,6 @@ export class Interpreter {
         }
 
         const val = this.evalExpr(expr.operand, env);
-
         switch (expr.op) {
             case "-": return this.makeNumeric(val, -asNumber(val));
             case "!": return BOOL(!isTruthy(val));
@@ -331,13 +319,10 @@ export class Interpreter {
 
     private evalCall(expr: AST.CallExpr, env: Environment): ASValue {
         const args = expr.args.map(a => this.evalExpr(a, env));
-
         if (expr.callee.kind === "MemberExpr") {
             const obj = this.evalExpr(expr.callee.object, env);
-            const methodName = expr.callee.member;
-            return this.callMethod(obj, methodName, args, expr.callee.line);
+            return this.callMethod(obj, expr.callee.member, args, expr.callee.line);
         }
-
         const callee = this.evalExpr(expr.callee, env);
         return this.callValue(callee, args, undefined);
     }
@@ -349,13 +334,15 @@ export class Interpreter {
 
     private evalIndex(expr: AST.IndexExpr, env: Environment): ASValue {
         const obj = this.evalExpr(expr.object, env);
-        const idx = this.evalExpr(expr.index, env);
+        const i = asNumber(this.evalExpr(expr.index, env));
 
-        if (obj.kind === "native") {
-            const arr = obj.native;
-            const i = asNumber(idx);
-            return this.wrapNative(arr[i]);
+        if (obj.kind === "array") {
+            if (i < 0 || i >= obj.elements.length)
+                throw new RuntimeError(`Array index ${i} out of bounds (size=${obj.elements.length})`, expr.line);
+            return obj.elements[i]!;
         }
+        if (obj.kind === "handle" && obj.ref?.kind === "native") return this.wrapNative(obj.ref.native[i]);
+        if (obj.kind === "native") return this.wrapNative(obj.native[i]);
         throw new RuntimeError(`Index on non-indexable value`, expr.line);
     }
 
@@ -368,10 +355,8 @@ export class Interpreter {
         const val = this.evalExpr(expr.expr, env);
         switch (expr.targetType.name) {
             case "int": case "uint": case "int8": case "int16": case "int64":
-            case "uint8": case "uint16": case "uint64":
-                return INT(asNumber(val));
-            case "float": case "double":
-                return FLOAT(asNumber(val));
+            case "uint8": case "uint16": case "uint64": return INT(asNumber(val));
+            case "float": case "double": return FLOAT(asNumber(val));
             case "bool": return BOOL(isTruthy(val));
             case "string": return STRING(stringify(val));
             default: return val;
@@ -386,7 +371,6 @@ export class Interpreter {
 
         if (obj.kind === "object") {
             if (obj.fields.has(name)) return obj.fields.get(name)!;
-
             const classDef = this.classDefs.get(obj.typeName);
             if (classDef) {
                 const method = classDef.members.find(m => m.kind === "FuncDecl" && m.name === name);
@@ -395,6 +379,10 @@ export class Interpreter {
                 }
             }
             throw new RuntimeError(`No member '${name}' on ${obj.typeName}`, line);
+        }
+
+        if (obj.kind === "array") {
+            return this.arrayMethod(obj, name, line);
         }
 
         if (obj.kind === "native") {
@@ -421,11 +409,8 @@ export class Interpreter {
             if (obj.ref === null) throw new RuntimeError(`Null handle method call '${name}'`, line);
             return this.callMethod(obj.ref, name, args, line);
         }
-
         const member = this.getMember(obj, name, line);
-        if (obj.kind === "object") {
-            return this.callValue(member, args, obj);
-        }
+        if (obj.kind === "object") return this.callValue(member, args, obj);
         return this.callValue(member, args, undefined);
     }
 
@@ -449,7 +434,7 @@ export class Interpreter {
             }
 
             for (let i = 0; i < decl.params.length; i++) {
-                const param = decl.params[i];
+                const param = decl.params[i]!;
                 fnEnv.define(param.name, args[i] ?? this.defaultValue(param.typeRef));
             }
 
@@ -502,6 +487,54 @@ export class Interpreter {
         return obj;
     }
 
+    private arrayMethod(arr: ArrayValue, name: string, line?: number): ASValue {
+        switch (name) {
+            case "size":
+            case "length":
+                return { kind: "native_function", name, fn: () => INT(arr.elements.length) };
+            case "empty":
+                return { kind: "native_function", name, fn: () => BOOL(arr.elements.length === 0) };
+            case "push":
+            case "insertLast":
+                return { kind: "native_function", name, fn: (val: ASValue) => { arr.elements.push(val); return VOID_VAL; } };
+            case "pop":
+            case "removeLast":
+                return { kind: "native_function", name, fn: () => { arr.elements.pop(); return VOID_VAL; } };
+            case "resize":
+                return {
+                    kind: "native_function", name, fn: (sizeVal: ASValue) => {
+                        const newSize = asNumber(sizeVal);
+                        while (arr.elements.length < newSize) arr.elements.push(INT(0));
+                        arr.elements.length = newSize;
+                        return VOID_VAL;
+                    }
+                };
+            case "reserve":
+                return { kind: "native_function", name, fn: () => VOID_VAL };
+            case "insertAt":
+                return {
+                    kind: "native_function", name, fn: (idxVal: ASValue, val: ASValue) => {
+                        arr.elements.splice(asNumber(idxVal), 0, val);
+                        return VOID_VAL;
+                    }
+                };
+            case "removeAt":
+                return {
+                    kind: "native_function", name, fn: (idxVal: ASValue) => {
+                        arr.elements.splice(asNumber(idxVal), 1);
+                        return VOID_VAL;
+                    }
+                };
+            case "find":
+                return {
+                    kind: "native_function", name, fn: (val: ASValue) =>
+                        INT(arr.elements.findIndex(el => isEqual(el, val)))
+                };
+            default:
+                throw new RuntimeError(`No array method '${name}'`, line);
+        }
+    }
+
     private stringMethod(s: string, name: string, line?: number): ASValue {
         const methods: Record<string, NativeFunctionValue> = {
             len: { kind: "native_function", name: "len", fn: () => INT(s.length) },
@@ -532,17 +565,17 @@ export class Interpreter {
             },
         };
 
-        if (name in methods) return methods[name];
+        if (name in methods) return methods[name]!;
         throw new RuntimeError(`No string method '${name}'`, line);
     }
 
     private makeNumeric(ref: ASValue, value: number): ASValue {
-        if (ref.kind === "float") return FLOAT(value);
-        return INT(value);
+        return ref.kind === "float" ? FLOAT(value) : INT(value);
     }
 
     private defaultValue(typeRef: AST.TypeRef): ASValue {
         if (typeRef.isHandle) return HANDLE(null);
+        if (typeRef.name === "array") return ARRAY();
         switch (typeRef.name) {
             case "int": case "uint": case "int8": case "int16": case "int64":
             case "uint8": case "uint16": case "uint64": return INT(0);
@@ -550,8 +583,7 @@ export class Interpreter {
             case "bool": return BOOL(false);
             case "string": return STRING("");
             case "void": return VOID_VAL;
-            default:
-                return HANDLE(null);
+            default: return HANDLE(null);
         }
     }
 
@@ -561,7 +593,7 @@ export class Interpreter {
         if (typeof val === "boolean") return BOOL(val);
         if (typeof val === "string") return STRING(val);
         if (typeof val === "function") return { kind: "native_function", name: val.name, fn: (...args: ASValue[]) => this.wrapNative(val(...args.map(a => this.unwrap(a)))) };
-        if (Array.isArray(val)) return { kind: "native", typeName: "array", native: val };
+        if (Array.isArray(val)) return ARRAY(val.map(v => this.wrapNative(v)));
         if (typeof val === "object") return { kind: "native", typeName: (val as any).constructor?.name ?? "object", native: val };
         return NULL_VAL;
     }
@@ -577,6 +609,7 @@ export class Interpreter {
             case "handle": return val.ref ? (val.ref.kind === "native" ? val.ref.native : val.ref) : null;
             case "object": return val;
             case "native": return val.native;
+            case "array": return val.elements.map(e => this.unwrap(e));
             default: return null;
         }
     }
